@@ -431,3 +431,283 @@ A: Yes! That's called dynamic resizing / rehashing. Coming after open addressing
 - Open addressing — second hashmap implementation, no linked lists
 - Dynamic resizing / rehashing
 ---
+## Class 3 - 2026-04-07
+
+### 🎯 Goal
+Complete Project 2 — helper functions for all types + open addressing hashmap
+
+### Session Summary
+
+✅ **Helper functions complete!**
+✅ **Open addressing hashmap complete!**
+
+**Technical Skills Gained:**
+- Type punning with `union` for double hashing
+- `fabs` for floating point comparison
+- Why `==` fails for doubles (floating point precision)
+- Function pointers as callbacks
+- Open addressing with linear probing
+- Tombstoning for safe deletion
+- Quadratic probing concept + its limitations
+- `enum` for named states
+
+---
+
+### 📝 Concepts Learned
+
+#### Floating Point Precision
+```c
+double a = 0.1 + 0.2;
+double b = 0.3;
+a == b  // ❌ FALSE! a is actually 0.30000000000000004
+```
+Doubles are stored in binary — most decimals can't be represented exactly, just approximated. Errors compound on arithmetic operations. Never use `==` with doubles.
+```c
+// Correct way to compare doubles
+return fabs(*(double *)a - *(double *)b) < 1e-9;  // "close enough"
+```
+`fabs` = absolute value for floats/doubles. `abs` is for ints only.
+
+#### Type Punning with `union`
+```c
+union {
+    double d;
+    unsigned long u;
+} pun;
+
+unsigned long double_hash(void *key) {
+    pun.d = *(double *)key;
+    return pun.u;  // reinterpret same bytes as unsigned long
+}
+```
+A `union` shares the same memory block for all its fields. Writing `pun.d` and reading `pun.u` gives you the raw bytes of the double interpreted as an integer — perfect for hashing.
+
+#### Open Addressing
+No linked lists. Every key lives directly in a flat array. On collision, **probe** for the next available slot.
+
+**Linear probing:**
+```c
+index = (index + 1) % size;  // try next slot, wrap around
+```
+
+**Quadratic probing:**
+```c
+index = (original_index + i*i) % size;  // jump farther each time
+```
+
+#### Three Slot States (Tombstoning)
+```c
+enum STATUS {EMPTY, OCCUPIED, DELETED};
+```
+- `EMPTY` — never used, stop probing here
+- `OCCUPIED` — live key
+- `DELETED` — tombstone, keep probing past it
+
+Why not just `NULL` for deleted? Can't distinguish "never used" from "was deleted" — search would stop too early and miss keys that probed past this slot.
+
+`calloc` zeroes all memory → `EMPTY = 0` must be first in enum so all slots start as `EMPTY` automatically.
+
+#### Primary vs Secondary Clustering
+**Linear probing** → primary clustering. Colliding keys form long consecutive chains, slowing probing.
+
+**Quadratic probing** → secondary clustering (less severe). But has a deeper problem — not guaranteed to visit every slot even if space is available:
+```
+size=10, original_index=3
+i=1: (3+1)  % 10 = 4
+i=2: (3+4)  % 10 = 7
+i=3: (3+9)  % 10 = 2
+i=4: (3+16) % 10 = 9
+i=5: (3+25) % 10 = 8
+i=6: (3+36) % 10 = 9  ← revisited!
+i=7: (3+49) % 10 = 2  ← revisited!
+```
+Infinite loop even with empty slots available!
+
+Fix: table size must be **prime** + load factor must stay below **0.5** → this is why rehashing is essential for quadratic probing.
+
+---
+
+### 🔧 Final Implementation
+
+#### `hashmap_helpers.h`
+```c
+#include <stdlib.h>
+
+unsigned long string_hash(void *key);
+int string_compare(void *a, void *b);
+unsigned long int_hash(void *key);
+int int_compare(void *a, void *b);
+unsigned long double_hash(void *key);
+int double_compare(void *a, void *b);
+```
+
+#### `hashmap_helpers.c`
+```c
+#include "hashmap_helpers.h"
+#include <string.h>
+#include <math.h>
+
+union {
+    double d;
+    unsigned long u;
+} pun;
+
+unsigned long string_hash(void *key) {
+    unsigned long hash = 5381;
+    char *k = (char *)key;
+    while(*k) {
+        hash = hash * 33 + *k++;
+    }
+    return hash;
+}
+
+int string_compare(void *a, void *b) {
+    return strcmp((char *)a, (char *)b) == 0;
+}
+
+unsigned long int_hash(void *key) {
+    return (unsigned long)*(int *)key;
+}
+
+int int_compare(void *a, void *b) {
+    return *(int *)a == *(int *)b;
+}
+
+unsigned long double_hash(void *key) {
+    pun.d = *(double *)key;
+    return pun.u;
+}
+
+int double_compare(void *a, void *b) {
+    return fabs(*(double *)a - *(double *)b) < 1e-9;
+}
+```
+
+#### `hashmap_oa.h`
+```c
+#include <stdlib.h>
+
+enum STATUS {EMPTY, OCCUPIED, DELETED};
+
+struct Slot {
+    void *key;
+    void *val;
+    enum STATUS status;
+};
+
+struct HashmapOA {
+    int size;
+    struct Slot *slots;
+    int (*comptr)(void*, void*);
+    unsigned long (*hashptr)(void*);
+};
+
+struct HashmapOA *hashmap_create(int size, int (*comptr)(void*, void*), unsigned long (*hashptr)(void*));
+void hashmap_set(struct HashmapOA *hashmap, void *key, void *value);
+void *hashmap_get(struct HashmapOA *hashmap, void *key);
+void hashmap_delete(struct HashmapOA *hashmap, void *key);
+void hashmap_free(struct HashmapOA *hashmap);
+```
+
+#### `hashmap_oa.c`
+```c
+#include <stdlib.h>
+#include "hashmap_oa.h"
+
+struct HashmapOA *hashmap_create(int size, int (*comptr)(void*, void*), unsigned long (*hashptr)(void*)) {
+    struct HashmapOA *hashmap = malloc(sizeof(struct HashmapOA));
+    hashmap->size = size;
+    hashmap->slots = calloc(size, sizeof(struct Slot));
+    hashmap->comptr = comptr;
+    hashmap->hashptr = hashptr;
+    return hashmap;
+}
+
+void hashmap_set(struct HashmapOA *hashmap, void *key, void *value) {
+    int size = hashmap->size;
+    int index = hashmap->hashptr(key) % size;
+    int counter = 0;
+    while(hashmap->slots[index].status == OCCUPIED) {
+        index = (index + 1) % size;
+        counter++;
+        if(counter == size) break;
+    }
+    if(counter != size) {
+        struct Slot *slot = &hashmap->slots[index];
+        slot->key = key;
+        slot->val = value;
+        slot->status = OCCUPIED;
+    }
+}
+
+void *hashmap_get(struct HashmapOA *hashmap, void *key) {
+    int size = hashmap->size;
+    int index = hashmap->hashptr(key) % size;
+    if(hashmap->slots[index].status == EMPTY) return NULL;
+    int counter = 0;
+    while(hashmap->slots[index].status != EMPTY) {
+        if(hashmap->slots[index].status == DELETED) {
+            index = (index + 1) % size;
+            counter++;
+            continue;
+        } else if(hashmap->comptr(hashmap->slots[index].key, key)) {
+            return hashmap->slots[index].val;
+        }
+        index = (index + 1) % size;
+        counter++;
+        if(counter == size) break;
+    }
+    return NULL;
+}
+
+void hashmap_delete(struct HashmapOA *hashmap, void *key) {
+    int size = hashmap->size;
+    int index = hashmap->hashptr(key) % size;
+    int counter = 0;
+    while(hashmap->slots[index].status != EMPTY) {
+        if(hashmap->slots[index].status == DELETED) {
+            index = (index + 1) % size;
+            counter++;
+            continue;
+        } else if(hashmap->comptr(hashmap->slots[index].key, key)) {
+            hashmap->slots[index].status = DELETED;
+            return;
+        }
+        index = (index + 1) % size;
+        counter++;
+        if(counter == size) break;
+    }
+}
+
+void hashmap_free(struct HashmapOA *hashmap) {
+    free(hashmap->slots);
+    free(hashmap);
+}
+```
+
+---
+
+### Your Questions & Learning Moments
+
+**Q: "Can we not do generics like C++ templates?"**
+A: No templates in C. Function pointers are C's answer — explicit, raw, and you see exactly what's happening.
+
+**Q: "So whenever a user uses my hashmap, they need to write helper functions themselves?"**
+A: Yes — but we solve this by providing `hashmap_helpers.c` with common types ready to use.
+
+**Q: "Can we not store NULL instead of tombstone?"**
+A: No — can't distinguish "never used" (stop probing) from "was deleted" (keep probing). Need all 3 states.
+
+**Q: "Quadratic probing would be `index = (index + i*i) % size`?"**
+A: Exactly right! `i` is the counter. Jumps farther each probe to reduce clustering.
+
+**Q: "I feel like I've overcomplicated things"**
+A: Good instinct to question complexity. Recognizing when code is tangled is a senior skill.
+
+---
+
+### Next Session
+- Rehashing / dynamic resizing
+- Pointer dojo — deep dive into `&`, `*`, pointer arithmetic
+- Benchmarks — chaining vs open addressing
+---
