@@ -13,14 +13,15 @@ struct HashmapOA {
     struct Slot *slots;
     int (*comptr)(void*, void*);
     unsigned long (*hashptr)(void*);
+    int occupied_count;
 };
 
-struct HashmapOA *hashmap_create(int size, int (*comptr)(void*, void*), unsigned long (*hashptr)(void*));
+struct HashmapOA *hashmap_oa_create(int size, int (*comptr)(void*, void*), unsigned long (*hashptr)(void*));
 
-void hashmap_set(struct HashmapOA *hashmap, void* key, void* value);
+void hashmap_oa_set(struct HashmapOA *hashmap, void* key, void* value);
 
-void* hashmap_get(struct HashmapOA *hashmap, void* key);
+void* hashmap_oa_get(struct HashmapOA *hashmap, void* key);
 
-void hashmap_delete(struct HashmapOA *hashmap, void* key);
+void hashmap_oa_delete(struct HashmapOA *hashmap, void* key);
 
-void hashmap_free(struct HashmapOA *hashmap);
+void hashmap_oa_free(struct HashmapOA *hashmap);

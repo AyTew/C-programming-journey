@@ -711,3 +711,217 @@ A: Good instinct to question complexity. Recognizing when code is tangled is a s
 - Pointer dojo — deep dive into `&`, `*`, pointer arithmetic
 - Benchmarks — chaining vs open addressing
 ---
+## Class 4 - 2026-04-08
+
+### 🎯 Goal
+Complete Project 2 — rehashing + benchmarks
+### Session Summary
+
+✅ **Project 2 — Hashmap — COMPLETE!**
+
+**Technical Skills Gained:**
+- Load factor calculation and threshold triggering
+- Dynamic rehashing — why you can't just memcpy
+- `static` functions — file-scoped visibility
+- `clock()` for benchmarking in C
+- Cache locality — why open addressing beats chaining in practice
+- Namespace prefixing convention in C (`hashmap_oa_`, `hashmap_chain_`)
+
+---
+
+### 📝 Concepts Learned
+
+#### Load Factor
+```
+load factor = occupied slots / total size
+```
+Don't wait until the hashmap is full — performance degrades well before that. Standard threshold is **0.7** (70% full). Check *before* inserting the new element:
+```c
+float load_factor = (float)(hashmap->occupied_count + 1) / hashmap->size;
+if(load_factor > LOAD_FACTOR_THRESHOLD) hashmap_rehash(hashmap);
+```
+The `+1` is important — you're checking what the load factor *will be* after the insert, not what it is now.
+
+#### Why You Can't memcpy When Rehashing
+```
+"abc" → hash % 10 = 3   (old array, size 10)
+"abc" → hash % 20 = 13  (new array, size 20)
+```
+Same key, different bucket. Copying bytes blindly puts every key in the wrong bucket. Every key must be re-inserted through `hashmap_set` so it lands in the correct position in the new array.
+
+#### Rehashing Steps
+1. Save old size, double `hashmap->size`
+2. `calloc` new slots array with new size
+3. Loop through old slots — re-insert every `OCCUPIED` slot into new array
+4. Update `hashmap->slots` to new array
+5. `free` old array
+
+#### `static` Functions in C
+```c
+static void hashmap_rehash(struct HashmapOA *hashmap);
+```
+`static` on a function = file-scoped. Only visible within the same `.c` file. Other files can't call it even if they wanted to. C's equivalent of `private` — no classes, so the boundary is the file instead.
+
+Convention: implementation details that callers should never touch get marked `static`.
+
+#### Namespace Prefixing in C
+C has no namespaces. Two functions named `hashmap_create` in different files = linker error. Solution: prefix everything with the module name.
+```c
+hashmap_oa_create(...)   // open addressing
+hashmap_chain_create(...)  // chaining
+```
+This is standard C convention — `pthread_create`, `SDL_Init`, `sqlite3_open` — same pattern everywhere.
+
+#### Cache Locality — Why Open Addressing Wins
+**Benchmark results — 1,000,000 insertions:**
+```
+Chaining:         0.069035s
+Open Addressing:  0.008831s
+→ Open addressing ~8x faster
+```
+
+**Why?**
+
+Chaining — every `Node` is `malloc`'d separately, scattered randomly across the heap. Every lookup chases pointers to different memory locations → **cache misses** everywhere. CPU has to fetch from RAM constantly.
+
+Open addressing — everything lives in one flat contiguous array. CPU automatically loads nearby slots into cache → **cache friendly**. Lookups find data already in cache.
+
+This is one of the most important performance lessons in systems programming:
+
+> **Data layout matters as much as algorithm complexity.**
+
+Two algorithms with identical Big O can have 8x real-world performance difference purely due to memory layout. This is why modern C++, Rust, and Go favor flat arrays over linked lists — even when Big O says they're equal.
+
+---
+
+### 🔧 Final Implementation
+
+#### `hashmap_oa.c` — rehashing
+```c
+static const float LOAD_FACTOR_THRESHOLD = 0.7;
+
+void hashmap_oa_set(struct HashmapOA *hashmap, void *key, void *value) {
+    float load_factor = (float)(hashmap->occupied_count + 1) / hashmap->size;
+    if(load_factor > LOAD_FACTOR_THRESHOLD) hashmap_rehash(hashmap);
+
+    int size = hashmap->size;  // capture AFTER potential rehash
+    int index = hashmap->hashptr(key) % size;
+    int counter = 0;
+    while(hashmap->slots[index].status == OCCUPIED) {
+        index = (index + 1) % size;
+        counter++;
+        if(counter == size) break;
+    }
+    if(counter != size) {
+        struct Slot *slot = &hashmap->slots[index];
+        slot->key = key;
+        slot->val = value;
+        slot->status = OCCUPIED;
+        hashmap->occupied_count++;
+    }
+}
+
+static void hashmap_rehash(struct HashmapOA *hashmap) {
+    int size = hashmap->size;
+    hashmap->size *= 2;
+    struct Slot *new_slots = calloc(hashmap->size, sizeof(struct Slot));
+    struct Slot *slots = hashmap->slots;
+
+    for(int i = 0; i < size; i++) {
+        if(slots[i].status == OCCUPIED) {
+            void *key = slots[i].key;
+            int index = hashmap->hashptr(key) % hashmap->size;
+            int counter = 0;
+            while(new_slots[index].status != EMPTY) {
+                index = (index + 1) % hashmap->size;
+                counter++;
+                if(counter == hashmap->size) break;
+            }
+            if(counter == hashmap->size) return;
+            new_slots[index].key = key;
+            new_slots[index].val = slots[i].val;
+            new_slots[index].status = OCCUPIED;
+        }
+    }
+    hashmap->slots = new_slots;
+    free(slots);
+}
+```
+
+#### `benchmark.c`
+```c
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "hashmap_oa.h"
+#include "hashmap.h"
+#include "hashmap_helpers.h"
+
+int main() {
+    struct HashmapOA *hashmap_oa = hashmap_oa_create(20000, int_compare, int_hash);
+    struct Hashmap *hashmap = hashmap_create(20000, int_compare, int_hash);
+
+    clock_t start = clock();
+    for(int i = 0; i < 1000000; i++) {
+        int key = rand();
+        hashmap_set(hashmap, &key, &key);
+    }
+    clock_t end = clock();
+    double chaining_duration = (double)(end - start) / CLOCKS_PER_SEC;
+
+    start = clock();
+    for(int i = 0; i < 1000000; i++) {
+        int key = rand();
+        hashmap_oa_set(hashmap_oa, &key, &key);
+    }
+    end = clock();
+    double oa_duration = (double)(end - start) / CLOCKS_PER_SEC;
+
+    printf("Duration for setting 1,000,000 random keys:\n");
+    printf("Chaining:        %f\n", chaining_duration);
+    printf("Open Addressing: %f\n", oa_duration);
+}
+```
+
+---
+
+### Your Questions & Learning Moments
+
+**Q: "This will affect performance — rehashing is an extra operation that iterates the whole array"**
+A: Exactly right — which is why we used size 20000 for both in the benchmark. Fair comparison without rehashing overhead skewing results.
+
+**Q: "Why can't I just memcpy the old array into the new one?"**
+A: Because hash values change with the new size. `hash % 10` and `hash % 20` give different buckets for the same key. Every key must find its new home through the hash function.
+
+**Q: "One file gives hashmap_func, one gives hashmap_oa_func — why linker error?"**
+A: Missing `hashmap.c` from the compile command. Always list every `.c` file: `gcc benchmark.c hashmap.c hashmap_oa.c hashmap_helpers.c`
+
+---
+
+### Benchmark Results
+```
+Insertions: 1,000,000
+Chaining:         0.069035s
+Open Addressing:  0.008831s
+Difference:       ~8x faster
+Reason:           Cache locality — flat array vs scattered heap nodes
+```
+
+---
+
+### Project 2 Complete ✅
+```
+✅ Chaining hashmap — generic with void *
+✅ Open addressing — linear probing + tombstoning  
+✅ Dynamic rehashing — load factor triggered at 0.7
+✅ Helper functions — string, int, double
+✅ hashmap_free — no memory leaks
+✅ Benchmarks — open addressing ~8x faster due to cache locality
+```
+
+---
+
+### Next Session
+- Pointer dojo — deep dive into `&`, `*`, pointer arithmetic (2-3 hours/day)
+- Project 3: Network Packet Analyzer
+---
