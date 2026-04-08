@@ -31,4 +31,7 @@ int main() {
     printf("Duration for setting 1,000,000 random keys:\n");
     printf("Chaining: %f\n", chaining_set_duration);
     printf("Open Addressing: %f\n", open_addressing_set_duration);
+
+    hashmap_free(hashmap);
+    hashmap_oa_free(hashmap_oa);
 }
