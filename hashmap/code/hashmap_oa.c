@@ -13,6 +13,9 @@ struct HashmapOA *hashmap_oa_create(int size, int (*comptr)(void*, void*), unsig
     hashmap->slots = calloc(size, sizeof(struct Slot));
     hashmap->comptr = comptr;
     hashmap->hashptr = hashptr;
+    hashmap->occupied_count=0;
+
+    printf("occupied count: %d\n", hashmap->occupied_count);
 
     return hashmap;
 }
