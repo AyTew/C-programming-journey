@@ -1,4 +1,4 @@
-## Class 5 - 2026-04-09
+# Pointer Dojo
 
 ### 🎯 Goal
 Pointer dojo — deep dive into pointer arithmetic, double pointers, dangling pointers
